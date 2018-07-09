@@ -1,0 +1,133 @@
+---
+title: "WM"
+author: "Juliana Clemente"
+date: "5 de julho de 2018"
+output: html_document
+---
+
+Passos:
+1 - entender os dados!
+2 - pre-processing
+   -> add o codigo do guilherme que confere se possui a biblioteca
+3 - analise exploratoria
+4 - desenv modelo (separar base de teste)
+5 - teste do modelo
+6 - desenvolver pdf e apresentacao
+7 - desenvolver codigo em python do modelo
+8 - subir no github
+
+# Metodologia CRISP-DM:
+
+- Entender o Negocio: 
+O objetivo do projeto eh identificar qual o perfil das revendas que mais aceitam leads (quantidade de leads aprovados), ja que sao os leads aprovados que geram receita  webmotors.
+
+- Entender os Dados: recolhimento de dados e inicio de atividades para
+familiarizacao com os dados, identificando problemas ou conjuntos interessantes.
+  - Chaves: ID, SAFRA e PRODUTO 
+  - Campos desconhecidos: 
+    - Valor_3: número de leads recusados
+    - Valor_2: número de leads aprovados
+    - Valor_1: número de leads recebidos
+
+
+- Prepara??o dos Dados: constru??o do conjunto de dados final a partir
+dos dados iniciais. Normalmente ocorre v?rias vezes no processo.
+
+
+- Modelagem: varias t?ecnicas de modelagem sao aplicadas, e seus
+par?metros calibrados para otimiza??o. Assim, e comum retornar a Preparacao dos Dados durante essa fase.
+
+
+- Avaliacao: ? constru?do um modelo que parece ter grande qualidade
+de uma perspectiva de an?lise de dados. No entanto, ? necess?rio verificar se o modelo atinge os objetivos do neg?cio.
+
+
+- Implantacao: o conhecimento adquirido pelo modelo ?
+organizado e apresentado de uma maneira que o cliente possa utilizar.
+
+
+# Processamento dos dados
+
+```{r "setup", include=FALSE}
+path = "C:/Users/juliana/Documents/CursoDataScience/Webmotors/"
+knitr::opts_knit$set(root.dir = path)
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, include = FALSE}
+library(openxlsx)
+library(RPostgreSQL)
+library(dplyr)
+library(ggplot2)
+library(lubridate)
+```
+
+# Preparacao dos dados
+
+## Importa os dados 
+```{r}
+# data <- read.xlsx(paste0(path, "Dados.xlsx")) # importa o arquivo "dados" direto do xlsx
+
+drv <- dbDriver("PostgreSQL")
+
+# cria conexao com a base de dados postgres 
+con <- dbConnect(drv, dbname = "dadoswm",
+                 host = "localhost", port = 5432,
+                 user = "postgres", password = "")
+
+#verifica se a tabela existe
+dbExistsTable(con, "client_leads")
+# TRUE
+
+
+```
+
+## Tentativa de corrigir INPUT
+```{r}
+
+
+temp <- data$CIDADE
+t <-  iconv(data, from = "UTF-8", to = "ISO_8859-2")[3]
+#cat(t)
+text <- capture.output(cat(t))
+
+temp$CIDADE <- as.data.frame(text) # altera a codifica??o de UTF-8 para ISO a fim de eliminar caracteres estranhos 
+```
+
+
+## Overview
+
+```{r}
+#summary(data)
+
+data <- data %>%
+  #altera formato dos dados e corrige missing values
+  mutate(DATA = as.factor(DATA),
+         CIDADE = as.factor(CIDADE),
+         UF = as.factor(UF),
+         MARCA.DE.ANUNCIO.DE.BLINDADOS = as.factor(MARCA.DE.ANUNCIO.DE.BLINDADOS),
+         # substitui missing value por 0 para leads aprovados e reprovados
+         QUANTIDADE.DE.LEADS.APROVADOS = ifelse(is.na(QUANTIDADE.DE.LEADS.APROVADOS), 0,
+                                                QUANTIDADE.DE.LEADS.APROVADOS),
+         QUANTIDADE.DE.LEADS.RECUSADOS = ifelse(is.na(QUANTIDADE.DE.LEADS.RECUSADOS), 0,
+                                                QUANTIDADE.DE.LEADS.RECUSADOS)) %>%
+  #cria vari?veis a partir dos dados
+  mutate(PERC.APROV = QUANTIDADE.DE.LEADS.APROVADOS/ (QUANTIDADE.DE.LEADS.APROVADOS +
+                                                        QUANTIDADE.DE.LEADS.RECUSADOS),
+         PERC.APROV = ifelse(is.na(PERC.APROV), 0, PERC.APROV))
+
+summary(data)
+```
+
+```{r}
+#2437 recusou 0 -> conectado c/ valor.3
+#2060 aprovou 0 -> conectado c/ valor.2
+#425 n?o recebeu leads -> conectado c/ valor.1
+temp <- data %>%
+  mutate(temp1 = VALOR.1/(QUANTIDADE.DE.LEADS.RECUSADOS+ QUANTIDADE.DE.LEADS.APROVADOS),
+         temp2 = VALOR.2/QUANTIDADE.DE.LEADS.APROVADOS,
+         temp3 = VALOR.3/QUANTIDADE.DE.LEADS.RECUSADOS) %>%
+  select(QUANTIDADE.DE.LEADS.RECUSADOS, QUANTIDADE.DE.LEADS.APROVADOS, 
+         VALOR.1, temp1, VALOR.2, temp2, VALOR.3, temp3 )
+```
+
