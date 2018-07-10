@@ -8,13 +8,15 @@ output: html_document
 Passos:
 1 - entender os dados!
 2 - pre-processing
-   -> add o codigo do guilherme que confere se possui a biblioteca
+   -> add o codigo que confere se possui a biblioteca
 3 - analise exploratoria
 4 - desenv modelo (separar base de teste)
 5 - teste do modelo
 6 - desenvolver pdf e apresentacao
 7 - desenvolver codigo em python do modelo
+  - isso pode ser util: https://medium.com/@davidsb/data-science-for-developers-you-have-a-predictive-model-now-what-expose-and-consume-an-r-model-710c3db85a24
 8 - subir no github
+    
 
 # Metodologia CRISP-DM:
 
@@ -30,20 +32,17 @@ familiarizacao com os dados, identificando problemas ou conjuntos interessantes.
     - Valor_1: número de leads recebidos
 
 
-- Prepara??o dos Dados: constru??o do conjunto de dados final a partir
-dos dados iniciais. Normalmente ocorre v?rias vezes no processo.
+- Preparacao dos Dados: construcao do conjunto de dados final a partir
+dos dados iniciais. Normalmente ocorre varias vezes no processo.
+  - criacao de variaveis
+
+- Modelagem: varias tecnicas de modelagem sao aplicadas, e seus parametros calibrados para otimizacao. A
 
 
-- Modelagem: varias t?ecnicas de modelagem sao aplicadas, e seus
-par?metros calibrados para otimiza??o. Assim, e comum retornar a Preparacao dos Dados durante essa fase.
+- Avaliacao: E construido um modelo que parece ter grande qualidade
+de uma perspectiva de analise de dados. No entanto, e necessario verificar se o modelo atinge os objetivos do negocio.
 
-
-- Avaliacao: ? constru?do um modelo que parece ter grande qualidade
-de uma perspectiva de an?lise de dados. No entanto, ? necess?rio verificar se o modelo atinge os objetivos do neg?cio.
-
-
-- Implantacao: o conhecimento adquirido pelo modelo ?
-organizado e apresentado de uma maneira que o cliente possa utilizar.
+- Implantacao: o conhecimento adquirido pelo modelo e organizado e apresentado de uma maneira que o cliente possa utilizar.
 
 
 # Processamento dos dados
@@ -55,11 +54,13 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 ```{r, include = FALSE}
-library(openxlsx)
+#library(openxlsx)
 library(RPostgreSQL)
 library(dplyr)
 library(ggplot2)
-library(lubridate)
+library(caret)
+library(GGally)
+library(rpart)
 ```
 
 # Preparacao dos dados
@@ -76,58 +77,145 @@ con <- dbConnect(drv, dbname = "dadoswm",
                  user = "postgres", password = "")
 
 #verifica se a tabela existe
-dbExistsTable(con, "client_leads")
+dbExieestsTable(con, "client_leads")
 # TRUE
 
-
+df_client_leads <- dbGetQuery(con, "SELECT * FROM client_leads")
 ```
 
 ## Tentativa de corrigir INPUT
+
 ```{r}
-
-
-temp <- data$CIDADE
-t <-  iconv(data, from = "UTF-8", to = "ISO_8859-2")[3]
+temp <- df_client_leads$cidade
+t <-  iconv(temp, from = "UTF-8", to = "ISO_8859-2")
 #cat(t)
 text <- capture.output(cat(t))
 
 temp$CIDADE <- as.data.frame(text) # altera a codifica??o de UTF-8 para ISO a fim de eliminar caracteres estranhos 
 ```
 
+## Visão geral dos dados
 
-## Overview
-
+Altera formato dos dados e corrige missing values
 ```{r}
-#summary(data)
+#summary(df_client_leads)
 
-data <- data %>%
-  #altera formato dos dados e corrige missing values
-  mutate(DATA = as.factor(DATA),
-         CIDADE = as.factor(CIDADE),
-         UF = as.factor(UF),
-         MARCA.DE.ANUNCIO.DE.BLINDADOS = as.factor(MARCA.DE.ANUNCIO.DE.BLINDADOS),
+df_client_leads <- df_client_leads %>%
+  mutate(data = as.factor(data),
+         cidade = as.factor(cidade),
+         uf = as.factor(uf),
+         produto = as.factor(produto),
+         marca_de_anuncio_de_blindados = as.factor(marca_de_anuncio_de_blindados),
          # substitui missing value por 0 para leads aprovados e reprovados
-         QUANTIDADE.DE.LEADS.APROVADOS = ifelse(is.na(QUANTIDADE.DE.LEADS.APROVADOS), 0,
-                                                QUANTIDADE.DE.LEADS.APROVADOS),
-         QUANTIDADE.DE.LEADS.RECUSADOS = ifelse(is.na(QUANTIDADE.DE.LEADS.RECUSADOS), 0,
-                                                QUANTIDADE.DE.LEADS.RECUSADOS)) %>%
-  #cria vari?veis a partir dos dados
-  mutate(PERC.APROV = QUANTIDADE.DE.LEADS.APROVADOS/ (QUANTIDADE.DE.LEADS.APROVADOS +
-                                                        QUANTIDADE.DE.LEADS.RECUSADOS),
-         PERC.APROV = ifelse(is.na(PERC.APROV), 0, PERC.APROV))
+         quantidade_de_leads_aprovados = ifelse(is.na(quantidade_de_leads_aprovados), 0,
+                                                quantidade_de_leads_aprovados),
+         quantidade_de_leads_recusados = ifelse(is.na(quantidade_de_leads_recusados), 0,
+                                                quantidade_de_leads_recusados)) 
 
-summary(data)
+summary(df_client_leads)
+```
+Cria variaveis a partir dos dados
+
+```{r}
+df_client_leads <- df_client_leads %>%
+  mutate(leads_recebidos = quantidade_de_leads_aprovados + quantidade_de_leads_recusados,
+         perc_aprov = quantidade_de_leads_aprovados/ leads_recebidos,
+         perc_aprov = ifelse(is.na(perc_aprov), 0, perc_aprov),
+         prop_1 = valor_1/leads_recebidos,
+         prop_2 = valor_2/quantidade_de_leads_aprovados,
+         prop_3 = valor_3/quantidade_de_leads_recusados)
+```
+
+Separa os dados em dados para treinar e para testar o modelo
+
+```{r}
+set.seed(1010) #define a semente para fins de reprodutibilidade
+train<-createDataPartition(df_client_leads$perc_aprov,p=0.7,list=FALSE)
+train_client_leads <-df_client_leads[train,]
+test_client_leads  <-df_client_leads[-train,]
+```
+
+# Analise exploratoria dos dados
+
+```{r}
+ggcorr(train_client_leads)
+
+ggpairs(train_client_leads, columns = c("perc_aprov", "quantidade_de_anuncios", 
+                                        "quantidade_de_aceleradores", "valor_de_anuncio_medio"), 
+        upper = list(continuous = wrap("cor", size = 10)), 
+        lower = list(continuous = "smooth"))
 ```
 
 ```{r}
-#2437 recusou 0 -> conectado c/ valor.3
-#2060 aprovou 0 -> conectado c/ valor.2
-#425 n?o recebeu leads -> conectado c/ valor.1
-temp <- data %>%
-  mutate(temp1 = VALOR.1/(QUANTIDADE.DE.LEADS.RECUSADOS+ QUANTIDADE.DE.LEADS.APROVADOS),
-         temp2 = VALOR.2/QUANTIDADE.DE.LEADS.APROVADOS,
-         temp3 = VALOR.3/QUANTIDADE.DE.LEADS.RECUSADOS) %>%
-  select(QUANTIDADE.DE.LEADS.RECUSADOS, QUANTIDADE.DE.LEADS.APROVADOS, 
-         VALOR.1, temp1, VALOR.2, temp2, VALOR.3, temp3 )
+ggplot(data = train_client_leads, mapping = aes(x = quantidade_de_leads_aprovados, y = valor_1)) + geom_jitter()
+
+ggplot(data = train_client_leads, mapping = aes(x = perc_aprov, y = valor_3)) + geom_jitter(aes(colour = perc_aprov))
+
+geom_boxplot()
+ggplot(data = student_data, mapping = aes(x = performance, y = nursery)) + geom_jitter(aes(colour = performance))
 ```
 
+# Desenvolvimento do modelo
+
+Elimina colunas desnecessarias
+
+```{r}
+#busca colunas com variancia perto de 0
+#nzv <- nearZeroVar(train_client_leads, saveMetrics = T)
+nzv <- nearZeroVar(train_client_leads)
+
+#elimina a coluna "amostra"
+train_client_leads <- train_client_leads[, - nzv]
+#elimina a coluna "cidade"
+train_client_leads <- train_client_leads[, -3]
+```
+
+```{r}
+mod <- lm(perc_aprov ~ ., train_client_leads)
+mod$xlevels[["uf"]] <- union(mod$xlevels[["uf"]], levels(test_client_leads$uf))
+
+pred <- predict(mod, test_client_leads, response = T)
+plot(pred - test_client_leads$perc_aprov)
+
+mod <- rpart(perc_aprov ~ ., train_client_leads)
+mod$xlevels[["uf"]] <- union(mod$xlevels[["uf"]], levels(test_client_leads$uf))
+
+pred <- predict(mod, test_client_leads, response = T)
+plot(pred - test_client_leads$perc_aprov)
+
+summary(mod)
+#error <- test_client_leads$perc_aprov - pred
+#rmse <- error^2
+```
+
+You can start by trying
+
+SVM
+Neural Nets
+Logistic Regression
+Beta Regression
+Nearest Neighbors
+
+Considerar GLM e Beta distribution!( I interpret the question as being about the ratio of two, positive, real values. If so, (and they are distributed as Gammas) that is a Beta distribution. However, if a is a count of 'successes' out of a known total, b, of 'trials', then this would be a count proportion a/b, not a continuous proportion, and you should use binomial GLM (e.g., logistic regression). For how to do it in R, see e.g. How to do logistic regression in R when outcome is fractional (a ratio of two counts))
+
+Aparentemente, interessante:
+https://stats.stackexchange.com/questions/26762/how-to-do-logistic-regression-in-r-when-outcome-is-fractional-a-ratio-of-two-co
+
+
+
+
+
+# Analises intemediarias
+
+Busca entender o significado dos campos valor_1, valor_2 e valor_3
+```{r}
+#2437 recusou 0 -> conectado c/ valor_3
+#2060 aprovou 0 -> conectado c/ valor_2
+#425 não recebeu leads -> conectado c/ valor_1
+temp <- df_client_leads %>%
+  mutate(temp_1 = valor_1/(quantidade_de_leads_recusados + quantidade_de_leads_aprovados),
+         temp_2 = valor_2/quantidade_de_leads_aprovados,
+         temp_3 = valor_3/quantidade_de_leads_recusados) %>%
+  select(quantidade_de_leads_recusados, quantidade_de_leads_aprovados, 
+         valor_1, temp_1, valor_2, temp_2, valor_3, temp_3 ) 
+```
