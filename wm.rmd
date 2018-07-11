@@ -8,7 +8,6 @@ output: html_document
 Passos:
 1 - entender os dados!
 2 - pre-processing
-   -> add o codigo que confere se possui a biblioteca
 3 - analise exploratoria
 4 - desenv modelo (separar base de teste)
 5 - teste do modelo
@@ -27,10 +26,9 @@ O objetivo do projeto eh identificar qual o perfil das revendas que mais aceitam
 familiarizacao com os dados, identificando problemas ou conjuntos interessantes.
   - Chaves: ID, SAFRA e PRODUTO 
   - Campos desconhecidos: 
-    - Valor_3: número de leads recusados
-    - Valor_2: número de leads aprovados
-    - Valor_1: número de leads recebidos
-
+    - Valor_3: numero de leads recusados
+    - Valor_2: numero de leads aprovados
+    - Valor_1: numero de leads recebidos
 
 - Preparacao dos Dados: construcao do conjunto de dados final a partir
 dos dados iniciais. Normalmente ocorre varias vezes no processo.
@@ -44,16 +42,20 @@ de uma perspectiva de analise de dados. No entanto, e necessario verificar se o 
 
 - Implantacao: o conhecimento adquirido pelo modelo e organizado e apresentado de uma maneira que o cliente possa utilizar.
 
-
-# Processamento dos dados
+# Carregando os dados
 
 ```{r "setup", include=FALSE}
-path = "C:/Users/juliana/Documents/CursoDataScience/Webmotors/"
+path = "C:/Users/sb042583/Documents/Pessoal/Cursos/WM/"
 knitr::opts_knit$set(root.dir = path)
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
 ```{r, include = FALSE}
+list.of.packages <- c("RPostgreSQL", "dplyr", "ggplot2", "caret", "GGally",
+                      "rpart")
+new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]
+if(length(new.packages)) install.packages(new.packages)
+
 #library(openxlsx)
 library(RPostgreSQL)
 library(dplyr)
@@ -61,47 +63,39 @@ library(ggplot2)
 library(caret)
 library(GGally)
 library(rpart)
+#library(rpart.plot)
+#library(Epi)
+library(evtree)
 ```
 
-# Preparacao dos dados
+Importa os dados com conexão via Postgres
 
-## Importa os dados 
 ```{r}
-# data <- read.xlsx(paste0(path, "Dados.xlsx")) # importa o arquivo "dados" direto do xlsx
+# df_client_leads <- read.xlsx(paste0(path, "DadosMin.xlsx")) # importa o arquivo "dados" direto do xlsx
 
 drv <- dbDriver("PostgreSQL")
 
-# cria conexao com a base de dados postgres 
+# cria conexao com a base de dados postgres
 con <- dbConnect(drv, dbname = "dadoswm",
                  host = "localhost", port = 5432,
                  user = "postgres", password = "")
 
 #verifica se a tabela existe
-dbExieestsTable(con, "client_leads")
+dbExistsTable(con, "client_leads")
 # TRUE
 
 df_client_leads <- dbGetQuery(con, "SELECT * FROM client_leads")
 ```
 
-## Tentativa de corrigir INPUT
-
-```{r}
-temp <- df_client_leads$cidade
-t <-  iconv(temp, from = "UTF-8", to = "ISO_8859-2")
-#cat(t)
-text <- capture.output(cat(t))
-
-temp$CIDADE <- as.data.frame(text) # altera a codifica??o de UTF-8 para ISO a fim de eliminar caracteres estranhos 
-```
-
-## Visão geral dos dados
+# Exploracao e preparacao dos dados
 
 Altera formato dos dados e corrige missing values
 ```{r}
 #summary(df_client_leads)
 
 df_client_leads <- df_client_leads %>%
-  mutate(data = as.factor(data),
+  mutate(id_cliente = as.character(id_cliente),
+         data = as.factor(data),
          cidade = as.factor(cidade),
          uf = as.factor(uf),
          produto = as.factor(produto),
@@ -110,24 +104,28 @@ df_client_leads <- df_client_leads %>%
          quantidade_de_leads_aprovados = ifelse(is.na(quantidade_de_leads_aprovados), 0,
                                                 quantidade_de_leads_aprovados),
          quantidade_de_leads_recusados = ifelse(is.na(quantidade_de_leads_recusados), 0,
-                                                quantidade_de_leads_recusados)) 
+                                                quantidade_de_leads_recusados),
+         quantidade_de_aceleradores = ifelse(is.na(quantidade_de_aceleradores), 0, 
+                                             quantidade_de_aceleradores)) 
 
 summary(df_client_leads)
 ```
-Cria variaveis a partir dos dados
 
+Cria variaveis a partir dos dados
 ```{r}
 df_client_leads <- df_client_leads %>%
   mutate(leads_recebidos = quantidade_de_leads_aprovados + quantidade_de_leads_recusados,
          perc_aprov = quantidade_de_leads_aprovados/ leads_recebidos,
          perc_aprov = ifelse(is.na(perc_aprov), 0, perc_aprov),
-         prop_1 = valor_1/leads_recebidos,
-         prop_2 = valor_2/quantidade_de_leads_aprovados,
-         prop_3 = valor_3/quantidade_de_leads_recusados)
+         class_aprov = ifelse(perc_aprov > 0.5, 1, 0),
+         prop_1 = ifelse(is.na(valor_1/leads_recebidos), 0, valor_1/leads_recebidos),
+         prop_2 = ifelse(is.na(valor_2/quantidade_de_leads_aprovados), 0,
+                         valor_2/quantidade_de_leads_aprovados),
+         prop_3 = ifelse(is.na(valor_3/quantidade_de_leads_recusados), 0, 
+                         valor_3/quantidade_de_leads_recusados))
 ```
 
-Separa os dados em dados para treinar e para testar o modelo
-
+Separa os dados em dados em duas partes, uma para treinar e outra para testar o modelo
 ```{r}
 set.seed(1010) #define a semente para fins de reprodutibilidade
 train<-createDataPartition(df_client_leads$perc_aprov,p=0.7,list=FALSE)
@@ -135,44 +133,103 @@ train_client_leads <-df_client_leads[train,]
 test_client_leads  <-df_client_leads[-train,]
 ```
 
-# Analise exploratoria dos dados
+# Visualizacao dos dados
 
+Boxplot das variáveis numéricas
 ```{r}
-ggcorr(train_client_leads)
+temp <- sapply(train_client_leads, is.numeric)
 
-ggpairs(train_client_leads, columns = c("perc_aprov", "quantidade_de_anuncios", 
-                                        "quantidade_de_aceleradores", "valor_de_anuncio_medio"), 
-        upper = list(continuous = wrap("cor", size = 10)), 
-        lower = list(continuous = "smooth"))
+par(mfrow=c(2,4))
+for(i in 1:length(temp)) {
+  if(temp[i] == T)
+    boxplot(train_client_leads[,i], main=names(train_client_leads)[i])
+}
 ```
+
+Verifica a correlação entre as variaveis numericas
+```{r}
+library(corrplot)
+cor <- cor(train_client_leads[, c(temp)],method="pearson")
+
+#ggcorr(train_client_leads, label = T)
+corrplot(cor, method="circle")
+```
+
+
 
 ```{r}
 ggplot(data = train_client_leads, mapping = aes(x = quantidade_de_leads_aprovados, y = valor_1)) + geom_jitter()
 
 ggplot(data = train_client_leads, mapping = aes(x = perc_aprov, y = valor_3)) + geom_jitter(aes(colour = perc_aprov))
 
-geom_boxplot()
 ggplot(data = student_data, mapping = aes(x = performance, y = nursery)) + geom_jitter(aes(colour = performance))
 ```
 
-# Desenvolvimento do modelo
+
+
+
 
 Elimina colunas desnecessarias
-
 ```{r}
 #busca colunas com variancia perto de 0
 #nzv <- nearZeroVar(train_client_leads, saveMetrics = T)
 nzv <- nearZeroVar(train_client_leads)
 
-#elimina a coluna "amostra"
-train_client_leads <- train_client_leads[, - nzv]
-#elimina a coluna "cidade"
-train_client_leads <- train_client_leads[, -3]
+#elimina a coluna "amostra" e "quantidade de aceleradores"
+cols_eliminar <- colnames(train_client_leads)[nzv] 
+#elimina as colunas valor_1, valor_2 e valor_3, que j? se encontram representadas por prop_1, prop_2 e prop_3
+cols_eliminar <- c(cols_eliminar, "valor_1", "valor_2", "valor_3")
+#elimina as colunas que representam minimo e maximo de valores (fotos, valor de anuncio e quilometragem), para considerar o valor medio dos itens
+cols_eliminar <- c(cols_eliminar, "quantidade_minima_de_fotos", "quantidade_m?xima_de_fotos", 
+                   "menor_quilometragem_anunciada", "maior_quilometragem_anunciada", 
+                   "menor_valor_de_anuncio", "maior_valor_de_anuncio")
+
+#elimina a coluna "cidade" por ser muito pulverizada
+cols_eliminar <- c(cols_eliminar, "cidade")
+
+#elimina as colunas "quantidade de leads aprovados" e "quantidade de leads recusados", para utilizar no lugar "leads recebidos" e "perc_aprov"
+cols_eliminar <- c(cols_eliminar, "quantidade_de_leads_aprovados", "quantidade_de_leads_recusados")
+
+train_client_leads <- train_client_leads[, !names(train_client_leads) %in% cols_eliminar]
+
+# cor <- as.data.frame(cor(train_client_leads[, 7:17],method="pearson"))
+# ggcorr(train_client_leads, label = T)
+
+#prop_1 tem alta correla??o com  prop_2 e prop_3, vamos manter somente prop_1
+cols_eliminar <- c("prop_2", "prop_3")
+
+
+train_client_leads <- train_client_leads[, !names(train_client_leads) %in% cols_eliminar]
+
 ```
+
+# Arvore de decisao
+```{r}
+model <- ctree(perc_aprov ~ valor_de_anuncio_medio + produto, train_client_leads)
+plot(model, type = "simple")
+
+model <- ctree(perc_aprov ~ prop_1 + uf, train_client_leads)
+plot(model, type = "simple")
+
+```
+
+
+# Analise exploratoria dos dados
+
+```{r}
+ggplot(data = train_client_leads, mapping = aes(x = quantidade_de_leads_aprovados, y = valor_1)) + geom_jitter()
+
+ggplot(data = train_client_leads, mapping = aes(x = perc_aprov, y = valor_3)) + geom_jitter(aes(colour = perc_aprov))
+
+ggplot(data = student_data, mapping = aes(x = performance, y = nursery)) + geom_jitter(aes(colour = performance))
+```
+
+# Desenvolvimento do modelo
 
 ```{r}
 mod <- lm(perc_aprov ~ ., train_client_leads)
 mod$xlevels[["uf"]] <- union(mod$xlevels[["uf"]], levels(test_client_leads$uf))
+mod$xlevels[["cidade"]] <- union(mod$xlevels[["cidade"]], levels(test_client_leads$cidade))
 
 pred <- predict(mod, test_client_leads, response = T)
 plot(pred - test_client_leads$perc_aprov)
@@ -188,13 +245,9 @@ summary(mod)
 #rmse <- error^2
 ```
 
-You can start by trying
 
-SVM
-Neural Nets
-Logistic Regression
-Beta Regression
-Nearest Neighbors
+
+Binomial Logistic Regression
 
 Considerar GLM e Beta distribution!( I interpret the question as being about the ratio of two, positive, real values. If so, (and they are distributed as Gammas) that is a Beta distribution. However, if a is a count of 'successes' out of a known total, b, of 'trials', then this would be a count proportion a/b, not a continuous proportion, and you should use binomial GLM (e.g., logistic regression). For how to do it in R, see e.g. How to do logistic regression in R when outcome is fractional (a ratio of two counts))
 
@@ -218,4 +271,9 @@ temp <- df_client_leads %>%
          temp_3 = valor_3/quantidade_de_leads_recusados) %>%
   select(quantidade_de_leads_recusados, quantidade_de_leads_aprovados, 
          valor_1, temp_1, valor_2, temp_2, valor_3, temp_3 ) 
+
+temp <- df_client_leads %>%
+    filter(valor_2 == 0)
 ```
+
+
