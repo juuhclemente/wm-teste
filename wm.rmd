@@ -6,9 +6,6 @@ output: html_document
 ---
 
 Passos:
-1 - entender os dados!
-2 - pre-processing
-3 - analise exploratoria
 4 - desenv modelo (separar base de teste)
 5 - teste do modelo
 6 - desenvolver pdf e apresentacao
@@ -17,33 +14,6 @@ Passos:
 8 - subir no github
     
 
-# Metodologia CRISP-DM:
-
-- Entender o Negocio: 
-O objetivo do projeto eh identificar qual o perfil das revendas que mais aceitam leads (quantidade de leads aprovados), ja que sao os leads aprovados que geram receita  webmotors.
-
-- Entender os Dados: recolhimento de dados e inicio de atividades para
-familiarizacao com os dados, identificando problemas ou conjuntos interessantes.
-  - Chaves: ID, SAFRA e PRODUTO 
-  - Campos desconhecidos: 
-    - Valor_3: numero de leads recusados
-    - Valor_2: numero de leads aprovados
-    - Valor_1: numero de leads recebidos
-
-- Preparacao dos Dados: construcao do conjunto de dados final a partir
-dos dados iniciais. Normalmente ocorre varias vezes no processo.
-  - criacao de variaveis
-
-- Modelagem: varias tecnicas de modelagem sao aplicadas, e seus parametros calibrados para otimizacao. A
-
-
-- Avaliacao: E construido um modelo que parece ter grande qualidade
-de uma perspectiva de analise de dados. No entanto, e necessario verificar se o modelo atinge os objetivos do negocio.
-
-- Implantacao: o conhecimento adquirido pelo modelo e organizado e apresentado de uma maneira que o cliente possa utilizar.
-
-# Carregando os dados
-
 ```{r "setup", include=FALSE}
 path = "C:/Users/sb042583/Documents/Pessoal/Cursos/WM/"
 knitr::opts_knit$set(root.dir = path)
@@ -51,12 +21,12 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 ```{r, include = FALSE}
-list.of.packages <- c("RPostgreSQL", "dplyr", "ggplot2", "caret", "GGally",
+list.of.packages <- c("dplyr", "ggplot2", "caret", "GGally",
                       "rpart")
 new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]
 if(length(new.packages)) install.packages(new.packages)
 
-#library(openxlsx)
+library(openxlsx)
 library(RPostgreSQL)
 library(dplyr)
 library(ggplot2)
@@ -66,9 +36,22 @@ library(rpart)
 #library(rpart.plot)
 #library(Epi)
 library(evtree)
+library(corrplot)
+require(gridExtra)
+library(MASS)
 ```
 
-Importa os dados com conexão via Postgres
+
+# Business Understanding
+
+O objetivo do projeto eh identificar qual o perfil das revendas que mais aceitam leads (quantidade de leads aprovados), ja que sao os leads aprovados que geram receita  webmotors.
+
+# Data Understanding
+
+Recolhimento de dados e inicio de atividades para familiarizacao com os dados, identificando problemas ou conjuntos interessantes.
+  - Chaves: ID, SAFRA e PRODUTO 
+  
+Importa os dados com conexao via Postgres
 
 ```{r}
 # df_client_leads <- read.xlsx(paste0(path, "DadosMin.xlsx")) # importa o arquivo "dados" direto do xlsx
@@ -87,9 +70,7 @@ dbExistsTable(con, "client_leads")
 df_client_leads <- dbGetQuery(con, "SELECT * FROM client_leads")
 ```
 
-# Exploracao e preparacao dos dados
-
-Altera formato dos dados e corrige missing values
+Altera formato dos dados e trata missing values
 ```{r}
 #summary(df_client_leads)
 
@@ -106,24 +87,123 @@ df_client_leads <- df_client_leads %>%
          quantidade_de_leads_recusados = ifelse(is.na(quantidade_de_leads_recusados), 0,
                                                 quantidade_de_leads_recusados),
          quantidade_de_aceleradores = ifelse(is.na(quantidade_de_aceleradores), 0, 
-                                             quantidade_de_aceleradores)) 
+                                             quantidade_de_aceleradores)) %>%
+  mutate(leads_recebidos = quantidade_de_leads_aprovados + quantidade_de_leads_recusados,
+         perc_aprov = quantidade_de_leads_aprovados/ leads_recebidos,
+         perc_aprov = ifelse(is.na(perc_aprov), 0, perc_aprov))
+  
 
 summary(df_client_leads)
 ```
 
+  - Campos desconhecidos: 
+    - Valor_3: numero de leads recusados
+    - Valor_2: numero de leads aprovados
+    - Valor_1: numero de leads recebidos
+
+Verifica a relacao entre valor_1, valor_2 e valor_3 com quantidade de leads
+```{r}
+v1 <- ggplot(data = df_client_leads, mapping = aes(x = leads_recebidos, y = valor_1)) + geom_jitter(aes(colour = perc_aprov))
+
+v2 <- ggplot(data = df_client_leads, mapping = aes(x = quantidade_de_leads_aprovados, y = valor_2)) + geom_jitter(aes(colour = perc_aprov))
+
+v3 <- ggplot(data = df_client_leads, mapping = aes(x = quantidade_de_leads_recusados, y = valor_3)) + geom_jitter(aes(colour = perc_aprov))
+
+grid.arrange(v1, v2, v3)
+```
+
+## Visualizacao dos dados
+
+Boxplot das variaveis numericas
+```{r}
+temp <- sapply(df_client_leads, is.numeric)
+
+par(mfrow=c(2,4))
+for(i in 1:length(temp)) {
+  if(temp[i] == T)
+    boxplot(df_client_leads[,i], main=names(df_client_leads)[i])
+}
+
+pairs(df_client_leads[, c(11, 12, 16, 18, 19, 24, 25)])
+```
+
+Verifica a correlacao entre as variaveis numericas
+```{r}
+cor <- cor(df_client_leads[, c(temp)],method="pearson")
+
+#ggcorr(df_client_leads, label = T)
+corrplot(cor, method="circle", type = "lower", tl.pos = "l", tl.col = "black")
+
+highlyCorrelated <- findCorrelation(cor, cutoff=0.75)
+
+print(colnames(cor[, c(highlyCorrelated)]))
+```
+
+# next
+
+
+
+- Modelagem: varias tecnicas de modelagem sao aplicadas, e seus parametros calibrados para otimizacao. A
+
+
+- Avaliacao: E construido um modelo que parece ter grande qualidade
+de uma perspectiva de analise de dados. No entanto, e necessario verificar se o modelo atinge os objetivos do negocio.
+
+- Implantacao: o conhecimento adquirido pelo modelo e organizado e apresentado de uma maneira que o cliente possa utilizar.
+
+
+
+
+
+
+
+
+# Data Preparation
+
+Construcao do conjunto de dados final a partir dos dados iniciais. 
+
 Cria variaveis a partir dos dados
 ```{r}
 df_client_leads <- df_client_leads %>%
-  mutate(leads_recebidos = quantidade_de_leads_aprovados + quantidade_de_leads_recusados,
-         perc_aprov = quantidade_de_leads_aprovados/ leads_recebidos,
-         perc_aprov = ifelse(is.na(perc_aprov), 0, perc_aprov),
-         class_aprov = ifelse(perc_aprov > 0.5, 1, 0),
-         prop_1 = ifelse(is.na(valor_1/leads_recebidos), 0, valor_1/leads_recebidos),
+  mutate(prop_1 = ifelse(is.na(valor_1/leads_recebidos), 0, valor_1/leads_recebidos),
          prop_2 = ifelse(is.na(valor_2/quantidade_de_leads_aprovados), 0,
                          valor_2/quantidade_de_leads_aprovados),
          prop_3 = ifelse(is.na(valor_3/quantidade_de_leads_recusados), 0, 
-                         valor_3/quantidade_de_leads_recusados))
+                         valor_3/quantidade_de_leads_recusados),
+         valor_1 = ifelse(is.na(valor_1), 0, valor_1),
+         valor_2 = ifelse(is.na(valor_2), 0, valor_2),
+         valor_3 = ifelse(is.na(valor_3), 0, valor_3))
 ```
+
+Barplot e boxplot das variaveis categoricas
+```{r}
+temp <- sapply(df_client_leads, is.factor)
+
+for(i in 1:length(temp)) {
+  
+  if(temp[i] == T){
+    colnames(df_client_leads)[i]
+      
+    #b <- barplot(prop.table(table(df_client_leads[,i])))
+    
+    c <- ggplot(aes_string(y = "perc_aprov", x = colnames(df_client_leads)[i]),
+                data = df_client_leads) +
+        geom_bar(stat="identity")
+                    
+    p <- ggplot(aes_string(y = "perc_aprov", x = colnames(df_client_leads)[i]), 
+           data = df_client_leads) +
+        geom_boxplot()
+    
+    grid.arrange(c, p)
+  }
+}
+```
+
+# Exploracao e preparacao dos dados
+
+
+
+
 
 Separa os dados em dados em duas partes, uma para treinar e outra para testar o modelo
 ```{r}
@@ -133,56 +213,25 @@ train_client_leads <-df_client_leads[train,]
 test_client_leads  <-df_client_leads[-train,]
 ```
 
-# Visualizacao dos dados
+# modelo 0
 
-Boxplot das variáveis numéricas
+Elimina colunas redundantes
 ```{r}
-temp <- sapply(train_client_leads, is.numeric)
+cols_eliminar <- c()
 
-par(mfrow=c(2,4))
-for(i in 1:length(temp)) {
-  if(temp[i] == T)
-    boxplot(train_client_leads[,i], main=names(train_client_leads)[i])
-}
-```
-
-Verifica a correlação entre as variaveis numericas
-```{r}
-library(corrplot)
-cor <- cor(train_client_leads[, c(temp)],method="pearson")
-
-#ggcorr(train_client_leads, label = T)
-corrplot(cor, method="circle")
-```
-
-
-
-```{r}
-ggplot(data = train_client_leads, mapping = aes(x = quantidade_de_leads_aprovados, y = valor_1)) + geom_jitter()
-
-ggplot(data = train_client_leads, mapping = aes(x = perc_aprov, y = valor_3)) + geom_jitter(aes(colour = perc_aprov))
-
-ggplot(data = student_data, mapping = aes(x = performance, y = nursery)) + geom_jitter(aes(colour = performance))
-```
-
-
-
-
-
-Elimina colunas desnecessarias
-```{r}
 #busca colunas com variancia perto de 0
 #nzv <- nearZeroVar(train_client_leads, saveMetrics = T)
 nzv <- nearZeroVar(train_client_leads)
 
 #elimina a coluna "amostra" e "quantidade de aceleradores"
 cols_eliminar <- colnames(train_client_leads)[nzv] 
-#elimina as colunas valor_1, valor_2 e valor_3, que j? se encontram representadas por prop_1, prop_2 e prop_3
-cols_eliminar <- c(cols_eliminar, "valor_1", "valor_2", "valor_3")
+
+#elimina as colunas valor_1, valor_2 e valor_3, que ja se encontram representadas por prop_1, prop_2 e prop_3
+#cols_eliminar <- c(cols_eliminar, "valor_1", "valor_2", "valor_3")
 #elimina as colunas que representam minimo e maximo de valores (fotos, valor de anuncio e quilometragem), para considerar o valor medio dos itens
-cols_eliminar <- c(cols_eliminar, "quantidade_minima_de_fotos", "quantidade_m?xima_de_fotos", 
-                   "menor_quilometragem_anunciada", "maior_quilometragem_anunciada", 
-                   "menor_valor_de_anuncio", "maior_valor_de_anuncio")
+#cols_eliminar <- c(cols_eliminar, "quantidade_minima_de_fotos", "quantidade_maxima_de_fotos", 
+#                   "menor_quilometragem_anunciada", "maior_quilometragem_anunciada", 
+#                   "menor_valor_de_anuncio", "maior_valor_de_anuncio")
 
 #elimina a coluna "cidade" por ser muito pulverizada
 cols_eliminar <- c(cols_eliminar, "cidade")
@@ -190,18 +239,64 @@ cols_eliminar <- c(cols_eliminar, "cidade")
 #elimina as colunas "quantidade de leads aprovados" e "quantidade de leads recusados", para utilizar no lugar "leads recebidos" e "perc_aprov"
 cols_eliminar <- c(cols_eliminar, "quantidade_de_leads_aprovados", "quantidade_de_leads_recusados")
 
-train_client_leads <- train_client_leads[, !names(train_client_leads) %in% cols_eliminar]
+#prop_1 tem alta correlacao com  prop_2 e prop_3, vamos manter somente prop_1
+#cols_eliminar <- c(cols_eliminar, "prop_2", "prop_3")
 
-# cor <- as.data.frame(cor(train_client_leads[, 7:17],method="pearson"))
-# ggcorr(train_client_leads, label = T)
-
-#prop_1 tem alta correla??o com  prop_2 e prop_3, vamos manter somente prop_1
-cols_eliminar <- c("prop_2", "prop_3")
-
+#elimina id_cliente por ser variavel identificadora
+cols_eliminar <- c(cols_eliminar, "id_cliente")
 
 train_client_leads <- train_client_leads[, !names(train_client_leads) %in% cols_eliminar]
+
 
 ```
+
+```{r}
+glm_model <- glm(perc_aprov ~ ., data = train_client_leads, family = binomial)
+
+step <- stepAIC(glm_model, direction="both", trace = F)
+
+step$anova
+
+coef(step)
+
+summary(glm_model)
+```
+
+```{r}
+step(glm_model,direction = "both")
+```
+
+```{r}
+library(party)
+cf1 <- cforest(perc_aprov ~ . , data= train_client_leads, control=cforest_unbiased(mtry=2,ntree=50)) # fit the random forest
+
+varimp(cf1)
+```
+
+# novo modelo
+
+Validação: https://stats.stackexchange.com/questions/51046/how-to-check-if-my-regression-model-is-good
+```{r}
+glm_model_new <- glm(perc_aprov ~ uf + menor_valor_de_anuncio + produto + quantidade_de_anuncios + 
+    valor_1 + valor_2 + prop_1 + prop_2 + prop_3, data = train_client_leads, family = binomial)
+
+summary(glm_model_new)
+```
+
+```{r}
+test_client_leads$pred <- predict(glm_model_new, newdata=test_client_leads, type='response')
+
+
+```
+
+#passo: variable importance
+
+http://dataaspirant.com/2018/01/15/feature-selection-techniques-r/
+
+
+
+
+
 
 # Arvore de decisao
 ```{r}
@@ -214,15 +309,7 @@ plot(model, type = "simple")
 ```
 
 
-# Analise exploratoria dos dados
 
-```{r}
-ggplot(data = train_client_leads, mapping = aes(x = quantidade_de_leads_aprovados, y = valor_1)) + geom_jitter()
-
-ggplot(data = train_client_leads, mapping = aes(x = perc_aprov, y = valor_3)) + geom_jitter(aes(colour = perc_aprov))
-
-ggplot(data = student_data, mapping = aes(x = performance, y = nursery)) + geom_jitter(aes(colour = performance))
-```
 
 # Desenvolvimento do modelo
 
